@@ -9,6 +9,7 @@ on:
         type: choice
         options:
           - ''
+          - 'Golden Gate'
           - 'Tahoe'
           - 'Sequoia'
           - 'Sonoma'
