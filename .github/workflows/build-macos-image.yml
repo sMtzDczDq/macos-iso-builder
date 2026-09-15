@@ -93,7 +93,7 @@ jobs:
   build-macos-image:
     needs: preflight
     if: needs.preflight.outputs._build == 'true'
-    runs-on: macos-15-intel
+    runs-on: ${{ inputs.macos_version == 'Golden Gate' && 'macos-latest' || 'macos-15-intel' }}
     timeout-minutes: 80
 
     steps:
