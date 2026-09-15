@@ -210,7 +210,7 @@ get_codename() {
         "14") echo "Sonoma" ;;
         "15") echo "Sequoia" ;;
         "26") echo "Tahoe" ;;
-        "27") echo "Golden Gate" ;;
+        "27") echo "Golden_Gate" ;;
         *) echo "" ;;
     esac
 }
