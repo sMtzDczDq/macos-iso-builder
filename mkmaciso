@@ -266,7 +266,7 @@ get_installer_app_name() {
             echo "Install macOS Tahoe"
             ;;
         "27")
-            echo "Install macOS Golden Gate"
+            echo "Install macOS 27 Golden Gate"
             ;;
         *)
             echo ""
