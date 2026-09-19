@@ -274,6 +274,19 @@ get_installer_app_name() {
     esac
 }
 
+get_media_product_version() {
+    local volume
+    volume="$1"
+    local sv
+    sv="/Volumes/${volume}/System/Library/CoreServices/SystemVersion"
+
+    if [ -f "$sv" ]; then
+        defaults read "$sv" ProductVersion 2>/dev/null
+    else
+        /usr/libexec/PlistBuddy -c "Print :ProductVersion" "/Volumes/${volume}/.IAPhysicalMedia" 2>/dev/null
+    fi
+}
+
 # ==========================
 # Interactive Menu Functions
 # ==========================
@@ -1246,7 +1259,7 @@ create_iso_10_12_and_later() {
 
     # Extract the exact version number and append it to the file name
     local exact_version_number
-    exact_version_number=$(defaults read "/Volumes/$(get_installer_app_name "$version_num")/System/Library/CoreServices/SystemVersion" ProductVersion)
+    exact_version_number=$(get_media_product_version "$(get_installer_app_name "$version_num")")
     FINAL_OUTPUT_PATH="${output_file%.iso}_$exact_version_number.iso"
 
     # Restore Info.plist
@@ -1378,7 +1391,7 @@ create_dmg_10_10_and_later() {
 
     # Extract the exact version number and append it to the file name
     local exact_version_number
-    exact_version_number=$(defaults read "/Volumes/$(get_installer_app_name "$version_num")/System/Library/CoreServices/SystemVersion" ProductVersion)
+    exact_version_number=$(get_media_product_version "$(get_installer_app_name "$version_num")")
     FINAL_OUTPUT_PATH="${output_file%.dmg}_$exact_version_number.dmg.img"
 
     # Unmount
