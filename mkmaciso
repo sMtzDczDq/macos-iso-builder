@@ -29,7 +29,7 @@
 #
 # While the script is compatible with Apple silicon Macs, it’s still recommended to run it on an x86_64 Intel Mac for optimal results.
 
-set -e # Exit on error
+set -ex # Exit on error
 #set -x # Debug
 
 # Official Apple download URLs for macOS 10.7-10.12 (except 10.9)

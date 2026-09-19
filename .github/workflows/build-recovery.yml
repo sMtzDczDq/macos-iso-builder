@@ -9,6 +9,7 @@ on:
         type: choice
         options:
           - ''
+          - 'Golden Gate'
           - 'Tahoe'
           - 'Sequoia'
           - 'Sonoma'
@@ -147,7 +148,7 @@ jobs:
         id: download_recovery_image
         run: |
           echo "Downloading macOS ${{ steps.version_info.outputs.version_name }} recovery..."
-          
+
           if [ -n "${{ steps.version_info.outputs.os_flag }}" ]; then
             script -q /dev/null python3 macrecovery.py -b "${{ steps.version_info.outputs.board_id }}" -m "${{ steps.version_info.outputs.model }}" -os "${{ steps.version_info.outputs.os_flag }}" download
           else
