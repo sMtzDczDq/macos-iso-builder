@@ -150,11 +150,14 @@ convert_to_raw_img() {
     local output_file
     output_file="$input_file"
 
-    # Normalize legacy .dmg.img to .img
-    if [[ "$output_file" == *.dmg.img ]]; then
+    # Normalize to a single .img extension
+    while [[ "$output_file" == *.dmg.img ]]; do
         output_file="${output_file%.dmg.img}.img"
-    elif [[ "$output_file" == *.dmg ]]; then
+    done
+    if [[ "$output_file" == *.dmg ]]; then
         output_file="${output_file%.dmg}.img"
+    elif [[ "$output_file" != *.img ]]; then
+        output_file="${output_file}.img"
     fi
 
     log_info "Converting image to raw GPT disk format for QEMU/Proxmox/OpenCore..."
