@@ -12,20 +12,14 @@
 #   - Produce the smallest possible installer images for both formats.
 #   - The image must be usable on Windows and Linux.
 #
+# IMG image (recommended for QEMU/Proxmox/OpenCore):
+#   - Raw GPT disk image. Attach as a virtual hard disk (AHCI/SATA/USB), not a CD/DVD.
+#   - Works with QEMU/Proxmox/OpenCore VMs and can be flashed to USB with dd/Rufus.
+#   - Produced by building a DMG/UDRW image and converting it to raw with qemu-img or hdiutil.
+#
 # ISO image:
-#   - A proper UDF DVD/CD format image (mountable in Windows).
-#   - Intended for virtual machine use; attach as a virtual CD/DVD drive.
-#   - Compatible with Proxmox VE, QEMU, VirtualBox, and VMware.
-#
-# DMG image:
-#   - Raw disk image with GUID Partition Table, this is mandatory so it can be flash to a USB drive using Rufus (Windows).
-#   - Can also be used with virtual machines, but must be attached as a virtual hard disk.
-#   - Most VMM require convert the .dmg image to a compatible virtual disk format using qemu-img,
-#       e.g. convert to .vhd for Hyper-V or .vmdk for VMware. QEMU can use raw disk image without conversion.
-#
-# For easier use and distribution, the final DMG image will have '.img' appended to its file name.
-# Rufus no longer require switching to "All files" to saw the DMG image in Explorer.
-# Also fix "qemu-img: Could not locate UDIF trailer in dmg file" error.
+#   - Hybrid UDF/HFS DVD/CD format image (mountable in Windows/macOS).
+#   - Attach as a virtual CD/DVD drive. Some OpenCore/QEMU setups may require IMG instead.
 #
 # While the script is compatible with Apple silicon Macs, it’s still recommended to run it on an x86_64 Intel Mac for optimal results.
 
@@ -146,6 +140,74 @@ detach_disk() {
     
     log_error "Failed to detach $disk after $RETRIES_COUNT attempts"
     return 1
+}
+
+convert_to_raw_img() {
+    local input_file
+    input_file="$1"
+    [ -z "$input_file" ] || [ ! -f "$input_file" ] && return 0
+
+    local output_file
+    output_file="$input_file"
+
+    # Normalize legacy .dmg.img to .img
+    if [[ "$output_file" == *.dmg.img ]]; then
+        output_file="${output_file%.dmg.img}.img"
+    elif [[ "$output_file" == *.dmg ]]; then
+        output_file="${output_file%.dmg}.img"
+    fi
+
+    log_info "Converting image to raw GPT disk format for QEMU/Proxmox/OpenCore..."
+
+    local converted
+    converted=0
+
+    if command -v qemu-img >/dev/null 2>&1; then
+        local tmp_raw
+        tmp_raw="${output_file}.qemu.raw"
+        # Try dmg first (UDIF/UDRW DMG), then raw. The source may have a .img name but be DMG-formatted.
+        if qemu-img convert -p -f dmg -O raw "$input_file" "$tmp_raw" 2>/dev/null; then
+            mv -f "$tmp_raw" "$output_file"
+            converted=1
+        else
+            rm -f "$tmp_raw" 2>/dev/null || true
+            tmp_raw="${output_file}.qemu.raw2"
+            if qemu-img convert -p -f raw -O raw "$input_file" "$tmp_raw" 2>/dev/null; then
+                mv -f "$tmp_raw" "$output_file"
+                converted=1
+            else
+                rm -f "$tmp_raw" 2>/dev/null || true
+            fi
+        fi
+    fi
+
+    if [ "$converted" -eq 0 ]; then
+        local tmp_rdxx
+        tmp_rdxx="${WORK_DIR}/converted_rdxx"
+        rm -f "${tmp_rdxx}" "${tmp_rdxx}.dmg" 2>/dev/null || true
+        if hdiutil convert -quiet -ov -format UDRW -o "$tmp_rdxx" "$input_file"; then
+            if [ -f "${tmp_rdxx}.dmg" ]; then
+                mv -f "${tmp_rdxx}.dmg" "$output_file"
+            else
+                mv -f "$tmp_rdxx" "$output_file"
+            fi
+            converted=1
+        else
+            rm -f "${tmp_rdxx}" "${tmp_rdxx}.dmg" 2>/dev/null || true
+        fi
+    fi
+
+    if [ "$converted" -eq 0 ]; then
+        log_warn "Could not convert image to raw format; keeping original image"
+        return 0
+    fi
+
+    if [ "$input_file" != "$output_file" ] && [ -f "$input_file" ]; then
+        rm -f "$input_file"
+    fi
+
+    FINAL_OUTPUT_PATH="$output_file"
+    log_info "Raw disk image ready: $FINAL_OUTPUT_PATH"
 }
 
 cleanup() {
@@ -364,15 +426,15 @@ show_format_menu() {
     echo ""
     print_separator
     echo ""
-    echo -e "  ${CYAN}1${NC})  ${BOLD}ISO${NC}  - For virtual machines (Proxmox, QEMU, VMware, VirtualBox)"
-    echo "            Attach to VMs as DVD/CD drive"
+    echo -e "  ${CYAN}1${NC})  ${BOLD}IMG${NC}  - Raw GPT disk image for QEMU/Proxmox/OpenCore VMs"
+    echo "            Attach as a virtual hard disk; also usable with dd/Rufus"
     echo ""
-    echo -e "  ${CYAN}2${NC})  ${BOLD}DMG${NC}  - For USB drives (use Rufus on Windows, dd on Linux)"
-    echo "            Can also be used with VMs as virtual hard disk"
+    echo -e "  ${CYAN}2${NC})  ${BOLD}ISO${NC}  - Hybrid UDF/HFS image for virtual DVD/CD"
+    echo "            Attach as a DVD/CD drive in VMs that support it"
     echo ""
     print_separator
     echo ""
-    echo -e "  ${YELLOW}Default: [1] ISO${NC}"
+    echo -e "  ${YELLOW}Default: [1] IMG${NC}"
     echo ""
     echo -n "  Enter your choice [1-2] or press Enter for default: "
 }
@@ -478,18 +540,18 @@ run_interactive_menu() {
         show_format_menu "$selected_version" "$selected_name"
         read -r choice
         
-        # Default to ISO
+        # Default to IMG
         if [ -z "$choice" ]; then
             choice=1
         fi
         
         case "$choice" in
             1)
-                selected_format="iso"
+                selected_format="img"
                 break
                 ;;
             2)
-                selected_format="dmg"
+                selected_format="iso"
                 break
                 ;;
             *)
@@ -966,9 +1028,7 @@ create_iso_dmg_10_7_10_8() {
         # Create DMG with GUID Partition Table from mounted InstallESD.dmg
         sudo hdiutil create -quiet -layout GPTSPUD -format UDRW -ov -volname "$volume_name" -srcdir "$WORK_DIR/InstallESD_mnt" "$FINAL_OUTPUT_PATH"
         
-        # Append .img extension
-        mv -f "$FINAL_OUTPUT_PATH" "${FINAL_OUTPUT_PATH}.img"
-        FINAL_OUTPUT_PATH="${FINAL_OUTPUT_PATH}.img"
+        # Keep as .dmg for now; convert_to_raw_img will produce the final raw .img for VM/USB use
         
         # Unmount
         sync && detach_disk "$WORK_DIR/InstallESD_mnt"
@@ -1102,7 +1162,8 @@ create_dmg_10_9_to_10_12_alt_method() {
     # Extract the exact version number and append it to the file name
     local exact_version_number
     exact_version_number=$(defaults read "$WORK_DIR/installer_mnt/System/Library/CoreServices/SystemVersion" ProductVersion)
-    FINAL_OUTPUT_PATH="${output_file%.dmg}_$exact_version_number.dmg.img"
+    FINAL_OUTPUT_PATH="${output_file%.img}_$exact_version_number.img"
+    FINAL_OUTPUT_PATH="${FINAL_OUTPUT_PATH%.dmg.img}.img"
     
 	sync && sleep 5
 	
@@ -1161,8 +1222,9 @@ create_iso_dmg_10_15_alt_method() {
     # Extract the exact version number and append it to the file name
     local exact_version_number
     exact_version_number=$(defaults read "$WORK_DIR/BaseSystem_mnt/System/Library/CoreServices/SystemVersion" ProductVersion)
-    if [ "$IMAGE_FORMAT" == "dmg" ]; then
-        FINAL_OUTPUT_PATH="${output_file%.dmg}_$exact_version_number.dmg.img"
+    if [ "$IMAGE_FORMAT" == "dmg" ] || [ "$IMAGE_FORMAT" == "img" ]; then
+        FINAL_OUTPUT_PATH="${output_file%.img}_$exact_version_number.img"
+        FINAL_OUTPUT_PATH="${FINAL_OUTPUT_PATH%.dmg.img}.img"
     else
         FINAL_OUTPUT_PATH="${output_file%.iso}_$exact_version_number.iso"
     fi
@@ -1373,7 +1435,8 @@ create_dmg_10_10_and_later() {
     # Extract the exact version number and append it to the file name
     local exact_version_number
     exact_version_number=$(defaults read "/Volumes/$(get_installer_app_name "$version_num")/System/Library/CoreServices/SystemVersion" ProductVersion)
-    FINAL_OUTPUT_PATH="${output_file%.dmg}_$exact_version_number.dmg.img"
+    FINAL_OUTPUT_PATH="${output_file%.img}_$exact_version_number.img"
+    FINAL_OUTPUT_PATH="${FINAL_OUTPUT_PATH%.dmg.img}.img"
     
     # Unmount
     detach_disk "$DISK_ID" && DISK_ID=""
@@ -1382,7 +1445,7 @@ create_dmg_10_10_and_later() {
     log_info "Final optimization..."
     sudo hdiutil resize -size min "$WORK_DIR/installer.dmg"
     
-    # Move to output and append .iso extension
+    # Move to output; convert_to_raw_img will convert to raw .img for VM/USB use
     mv -f "$WORK_DIR/installer.dmg" "$FINAL_OUTPUT_PATH"
 }
 
@@ -1400,13 +1463,17 @@ main() {
     # Require sudo
     check_sudo_access
     
-    # Validate image format (default to iso if empty, fallback to dmg if invalid input)
+    # Validate image format (default to iso if empty, fallback to img if invalid input)
+    # img/raw/dmg produce a raw GPT disk image for QEMU/Proxmox/VMware (attach as virtual hard disk).
+    # iso produces a hybrid UDF/HFS ISO (attach as virtual CD/DVD).
     IMAGE_FORMAT=$(echo "$IMAGE_FORMAT" | tr '[:upper:]' '[:lower:]')
     if [[ -z "$IMAGE_FORMAT" ]]; then
         IMAGE_FORMAT="iso"
-    elif [[ "$IMAGE_FORMAT" != "iso" && "$IMAGE_FORMAT" != "dmg" ]]; then
-        log_warn "Invalid image format '$IMAGE_FORMAT'; falling back to dmg"
-        IMAGE_FORMAT="dmg"
+    elif [[ "$IMAGE_FORMAT" == "raw" || "$IMAGE_FORMAT" == "dmg" ]]; then
+        IMAGE_FORMAT="img"
+    elif [[ "$IMAGE_FORMAT" != "iso" && "$IMAGE_FORMAT" != "img" ]]; then
+        log_warn "Invalid image format '$IMAGE_FORMAT'; falling back to img"
+        IMAGE_FORMAT="img"
     fi
     
     # Normalize version input
@@ -1437,6 +1504,9 @@ main() {
     
     log_info "Target macOS:${GREEN} $VERSION_NAME ($VERSION_NUM) ${NC}"
     log_info "Image format:${GREEN} $(echo $IMAGE_FORMAT | tr '[:lower:]' '[:upper:]') ${NC}"
+    if [ "$IMAGE_FORMAT" == "img" ]; then
+        log_info "Note: 'img' produces a raw GPT disk image for QEMU/Proxmox/OpenCore (attach as virtual hard disk)"
+    fi
     
     # Determine output filename if not specified
     if [ -z "$OUTPUT_PATH" ]; then
@@ -1444,7 +1514,12 @@ main() {
     else
         # Ensure output path has correct extension
         if [[ "$OUTPUT_PATH" != *.$IMAGE_FORMAT ]]; then
-            OUTPUT_PATH="${OUTPUT_PATH%.*}.$IMAGE_FORMAT"
+            # Strip known image extensions before appending the requested format
+            OUTPUT_PATH="${OUTPUT_PATH%.dmg.img}"
+            OUTPUT_PATH="${OUTPUT_PATH%.img}"
+            OUTPUT_PATH="${OUTPUT_PATH%.dmg}"
+            OUTPUT_PATH="${OUTPUT_PATH%.iso}"
+            OUTPUT_PATH="${OUTPUT_PATH}.${IMAGE_FORMAT}"
         fi
         # Convert to absolute path
         if [[ "$OUTPUT_PATH" != /* ]]; then
@@ -1507,6 +1582,9 @@ main() {
             *)
                 create_dmg_10_10_and_later "$INSTALLER_PATH" "$OUTPUT_PATH" "$VERSION_NUM" ;;
         esac
+
+        # Convert DMG/UDRW images to raw GPT disk image for QEMU/Proxmox/OpenCore.
+        convert_to_raw_img "$FINAL_OUTPUT_PATH"
     fi
     
     # Final checks
@@ -1534,13 +1612,13 @@ main() {
         if [ "$IMAGE_FORMAT" == "iso" ]; then
             log_info "This ISO image is intended for creating macOS virtual machine:"
             log_info "  - Compatible with Proxmox VE, QEMU, VMware, and VirtualBox"
-            log_info "  - Add as DVD/CD drive to the VM"
+            log_info "  - Add as DVD/CD drive to the VM (or convert to raw disk for OpenCore/QEMU VMs)"
             echo ""
         else
-            log_info "This DMG image is intended for:"
-            log_info "  - Flash to USB drive using Rufus (Windows) or dd (Linux)"
-            log_info "  - Can also be used with virtual machines (requires conversion to .vhd for Hyper-V or .vmdk for VMware)"
-            log_info "  - Add to the VM as a virtual hard drive"
+            log_info "This raw disk image is intended for:"
+            log_info "  - QEMU/Proxmox/OpenCore VMs: attach as a virtual hard disk (AHCI/SATA/virtio-blk as appropriate)"
+            log_info "  - VMware/VirtualBox: attach as a virtual hard disk; convert with qemu-img if required"
+            log_info "  - Flash to USB drive using dd (Linux/macOS) or Rufus (Windows)"
             echo ""
         fi
     else
@@ -1562,7 +1640,7 @@ Usage:
 
 Parameters:
   VERSION         macOS version number or codename, e.g. 26 or Tahoe
-  FORMAT          iso or dmg (default: iso)
+  FORMAT          img, iso, dmg, or raw (default: iso; img/raw/dmg produce a raw GPT disk image for QEMU/OpenCore)
   OUTPUT_PATH     Output file path (default: ./macOS_<version>.<format>)
 
 Supported versions:
@@ -1577,9 +1655,10 @@ Supported versions:
 
 Examples:
   mkmaciso                              Interactive mode
+  mkmaciso 26 img                       Create Tahoe raw disk image for QEMU/OpenCore
   mkmaciso 14                           Create Sonoma ISO
-  mkmaciso 14 dmg                       Create Sonoma DMG
-  mkmaciso sonoma dmg ~/Desktop/out.dmg Create Sonoma DMG at specified path
+  mkmaciso 14 iso                       Create Sonoma ISO
+  mkmaciso sonoma img ~/Desktop/out.img Create Sonoma raw disk image at specified path
 
 Requirements:
   - macOS 11 (Big Sur) or later for create macOS 10.13+ image

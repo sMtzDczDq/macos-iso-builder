@@ -154,32 +154,41 @@ jobs:
             script -q /dev/null python3 macrecovery.py -b "${{ steps.version_info.outputs.board_id }}" -m "${{ steps.version_info.outputs.model }}" download
           fi
 
-      - name: Create Recovery ISO
+      - name: Install qemu-img
+        run: brew install qemu
+
+      - name: Create Recovery Images
         id: create_iso
         run: |
           VERSION_NAME="${{ steps.version_info.outputs.version_name }}"
           ISO_FILE="macOS_${VERSION_NAME}_Recovery.iso"
+          IMG_FILE="macOS_${VERSION_NAME}_Recovery.img"
           RECOVERY_PATH="com.apple.recovery.boot/BaseSystem.dmg"
 
           sudo hdiutil makehybrid -hfs -udf -default-volume-name "${VERSION_NAME}_Recovery" -o "$ISO_FILE" "$RECOVERY_PATH"
 
-          if [ -f "$ISO_FILE" ]; then
-            ISO_SIZE=$(du -h "$ISO_FILE" | cut -f1)
+          # Raw GPT disk image for QEMU/Proxmox/OpenCore (attach as virtual hard disk)
+          qemu-img convert -p -f dmg -O raw "$RECOVERY_PATH" "$IMG_FILE"
+
+          if [ -f "$ISO_FILE" ] && [ -f "$IMG_FILE" ]; then
             echo "ISO created successfully!"
-            echo "ISO size: $ISO_SIZE"
+            echo "ISO size: $(du -h "$ISO_FILE" | cut -f1)"
+            echo "IMG size: $(du -h "$IMG_FILE" | cut -f1)"
             echo "iso_file=$ISO_FILE" >> $GITHUB_OUTPUT
+            echo "img_file=$IMG_FILE" >> $GITHUB_OUTPUT
           else
             exit 1
           fi
 
-      - name: Compress ISO
+      - name: Compress images
         id: compress_iso
         run: |
           ISO_FILE="${{ steps.create_iso.outputs.iso_file }}"
-          ZIP_FILE="${ISO_FILE}.zip"
+          IMG_FILE="${{ steps.create_iso.outputs.img_file }}"
+          ZIP_FILE="macOS_${{ steps.version_info.outputs.version_name }}_Recovery.zip"
 
-          echo "Compressing ISO with zip..."
-          zip -j "$ZIP_FILE" "$ISO_FILE"
+          echo "Compressing recovery images..."
+          zip -j "$ZIP_FILE" "$ISO_FILE" "$IMG_FILE"
           echo "compressed_file=$ZIP_FILE" >> $GITHUB_OUTPUT
 
       - name: Upload Recovery ISO artifact
@@ -223,10 +232,11 @@ jobs:
                 "> [!WARNING]" \
                 "> This runner may have network issues. Please **re-run the workflow** to try a different runner."
           elif [ "${{ job.status }}" == "success" ]; then
-            sum "## Successfully built **macOS ${{ steps.version_info.outputs.version_name }} Recovery** ISO" \
+            sum "## Successfully built **macOS ${{ steps.version_info.outputs.version_name }} Recovery** images" \
                 "" \
                 "> [!Important]" \
-                "> This ISO image is intended for creating macOS virtual machine on Proxmox VE, QEMU, and VMware." \
+                "> The ZIP contains both an ISO (virtual DVD/CD) and a raw IMG (QEMU/Proxmox/OpenCore virtual hard disk)." \
+                "> For Quickemu/OpenCore setups, use the **.img** and attach it as a disk, not a CD." \
                 "" \
                 "> [!TIP]" \
                 "> Enable [Cloudflare WARP](https://one.one.one.one/) for faster download from GitHub artifact."

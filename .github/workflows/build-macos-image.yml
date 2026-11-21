@@ -25,13 +25,13 @@ on:
           - 'Mountain Lion'
           - 'Lion'
       image_format:
-        description: "Choose 'iso' for virtual machines, 'dmg' for flash to USB drive."
+        description: "Choose 'img' for QEMU/Proxmox/OpenCore VMs or USB, 'iso' for virtual DVD/CD."
         required: true
         type: choice
         options:
           - ''
+          - 'img'
           - 'iso'
-          - 'dmg'
 
 jobs:
   preflight:
@@ -110,6 +110,10 @@ jobs:
           echo ""
           echo "CPU: $(sysctl -n machdep.cpu.brand_string)"
 
+      - name: Install qemu-img for raw image conversion
+        if: inputs.image_format != 'iso'
+        run: brew install qemu
+
       - name: Create macOS image
         id: create_image
         run: |
@@ -117,7 +121,7 @@ jobs:
           if [ "${{ inputs.image_format }}" == "iso" ]; then
             echo "image_name=$(basename *.iso)" >> $GITHUB_OUTPUT
           else
-            echo "image_name=$(basename *.dmg.img)" >> $GITHUB_OUTPUT
+            echo "image_name=$(basename *.img)" >> $GITHUB_OUTPUT
           fi
 
       - name: Upload artifact
@@ -145,10 +149,10 @@ jobs:
                   "> [!Important]" \
                   "> This ISO image is intended for creating macOS virtual machines on Proxmox VE, QEMU, and VMware."
             else
-              sum "## Successfully built $(basename *.dmg.img)" \
+              sum "## Successfully built $(basename *.img)" \
                   "" \
                   "> [!Important]" \
-                  '> This DMG image is intended for flashing to USB drive using [Rufus](https://rufus.ie/en/#download) *(Windows)* or `dd` *(Linux)*.'
+                  "> This raw disk image is intended for QEMU/Proxmox/OpenCore VMs (attach as a virtual hard disk) and can also be flashed to USB with dd/Rufus."
             fi
             sum "" \
                 "> [!TIP]" \
